@@ -12,7 +12,7 @@ const SKINS = [
   { id:'daji',     name:'九尾·妲己',  file:'assets/skins/daji.jpg' },
   { id:'wukong',   name:'齐天·悟空',  file:'assets/skins/wukong.jpg' },
   { id:'qingming', name:'汴河·赛博清明上河图', file:'assets/skins/qingming.jpg' },
-  { id:'qingming_wide', name:'汴河·赛博清明上河图·横卷', file:'assets/skins/qingming_wide.jpg' },
+  { id:'qingming_wide', name:'汴河·赛博清明上河图·横卷', file:'assets/skins/qingming_wide.jpg', wide: true },
 ];
 
 const PALETTE_SIZE = 16;   // 中位切分初始主色数量
@@ -488,11 +488,17 @@ function renderThumbs(){
     thumbsEl.innerHTML = '';
     SKINS.forEach(s => {
       const t = document.createElement('div');
-      t.className = 'thumb';
+      t.className = 'thumb' + (s.wide ? ' wide' : '');
       t.dataset.id = s.id;
       const img = document.createElement('img');
       img.src = s.file;
       img.alt = s.name;
+      // 未标注时按实际宽高比决定是否占两格
+      if(!s.wide){
+        img.addEventListener('load', () => {
+          if(img.naturalWidth > img.naturalHeight) t.classList.add('wide');
+        }, { once:true });
+      }
       const name = document.createElement('div');
       name.className = 'thumb-name';
       name.textContent = s.name.split('·')[1] || s.name;
