@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拼豆工坊 // NEON PIXELS</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="scanlines"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-glyph">▙▟</span>
+    <div>
+      <h1 class="brand-title">拼豆工坊</h1>
+      <p class="brand-sub">// NEON PIXELS · 赛博国风像素画</p>
+    </div>
+  </div>
+  <div class="topbar-stats">
+    <div class="stat"><span class="stat-label">完成度</span><span class="stat-val" id="statPct">0%</span></div>
+    <div class="stat"><span class="stat-label">已涂格</span><span class="stat-val" id="statDone">0</span></div>
+    <div class="stat"><span class="stat-label">总格数</span><span class="stat-val" id="statTotal">0</span></div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- 左侧 · 拼豆画布区 -->
+  <section class="canvas-side">
+    <div class="bar">
+      <div class="thumbs" id="thumbs"></div>
+      <div class="size-switch" id="sizeSwitch">
+        <span class="label">宽</span>
+        <input class="num" id="inCols" type="number" min="8" max="120" value="45">
+        <span class="label">高</span>
+        <input class="num" id="inRows" type="number" min="8" max="200" value="" placeholder="自动">
+        <button class="seg apply" id="btnApply">应用</button>
+        <button class="seg preset" data-cols="12" data-rows="16">超小</button>
+        <button class="seg preset" data-cols="20" data-rows="26">小</button>
+        <button class="seg preset active" data-cols="45" data-rows="60">中</button>
+        <button class="seg preset" data-cols="60" data-rows="80">大</button>
+        <button class="seg preset" data-cols="90" data-rows="120">超大</button>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <div class="canvas-head">
+        <span id="skinName">载入中…</span>
+        <span class="meta" id="gridMeta">--×--</span>
+      </div>
+      <div class="grid-stage">
+        <canvas class="grid" id="grid"></canvas>
+        <div class="toast" id="toast">不能涂这个颜色！</div>
+        <div class="victory" id="victory">
+          <div class="confetti" id="confetti"></div>
+          <div class="victory-inner">
+            <div class="victory-glow"></div>
+            <div class="victory-title">COMPLETE</div>
+            <div class="victory-sub">像素已拼齐</div>
+            <div class="rainbow-fart" id="rainbowFart">天呐！你是被像素之神亲吻过的手吗！</div>
+            <button class="btn" id="victoryReset">再来一幅</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="bar bottom">
+        <button class="btn ghost" id="btnHint">显示底图</button>
+        <button class="btn ghost" id="btnReset">重置</button>
+        <button class="btn ghost" id="btnReveal">查看完成图</button>
+        <button class="btn cheat" id="btnFillAll">一键涂满</button>
+        <button class="btn cheat" id="btnFillRow">逐行涂</button>
+        <span class="tip">提示：选中颜色后点击或拖拽涂色，涂错会被拦截</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右侧 · 选色与控制区 -->
+  <aside class="control-side">
+    <div class="panel">
+      <h3 class="panel-title">取色板</h3>
+      <p class="panel-desc">从皮肤主色自动提取，点选当画笔</p>
+      <div class="palette" id="palette"></div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">当前画笔</h3>
+      <div class="brush" id="brush">
+        <span class="brush-dot" id="brushDot"></span>
+        <span class="brush-name" id="brushName">未选择</span>
+        <span class="brush-hex" id="brushHex"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">规则</h3>
+      <ul class="rules">
+        <li>左侧为像素化后的拼豆底图</li>
+        <li>右侧选色后点击空格涂色</li>
+        <li>颜色与该格目标色不符 → 拦截并提示，不填色</li>
+        <li>涂满全部格子即完成</li>
+      </ul>
+    </div>
+
+    <div class="panel tech">
+      <h3 class="panel-title">技术栈</h3>
+      <div class="tags">
+        <span class="tag">Canvas getImageData</span>
+        <span class="tag">中位切分量化</span>
+        <span class="tag">加权RGB色差</span>
+        <span class="tag">事件委托</span>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
