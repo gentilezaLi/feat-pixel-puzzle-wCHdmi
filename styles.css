@@ -196,15 +196,15 @@ body{
   margin-bottom:6px; text-shadow:0 0 8px rgba(45,226,230,0.3)}
 .panel-desc{font-size:12px; color:var(--muted); margin-bottom:12px; line-height:1.6}
 
-.palette{display:grid; grid-template-columns:repeat(6,1fr); gap:8px}
+.palette{display:grid; grid-template-columns:repeat(6,1fr); gap:8px; padding:6px; overflow:visible}
 .swatch{
   position:relative; aspect-ratio:1/1; border-radius:8px; cursor:pointer;
-  border:2px solid rgba(255,255,255,0.08); transition:all .15s ease;
+  border:2px solid rgba(255,255,255,0.08); transition:all .15s ease; z-index:0;
 }
-.swatch:hover{transform:translateY(-2px); border-color:rgba(255,255,255,0.4)}
-.swatch.active{border-color:var(--neon-cyan); box-shadow:0 0 14px rgba(45,226,230,0.6)}
+.swatch:hover{transform:translateY(-2px); border-color:rgba(255,255,255,0.4); z-index:1}
+.swatch.active{border-color:var(--neon-cyan); box-shadow:0 0 14px rgba(45,226,230,0.6); z-index:2}
 .swatch.active::after{content:""; position:absolute; inset:-5px; border:1.5px dashed var(--neon-cyan);
-  border-radius:10px; animation:dashRot 6s linear infinite}
+  border-radius:10px; animation:dashRot 6s linear infinite; pointer-events:none; z-index:1}
 @keyframes dashRot{to{transform:rotate(360deg)}}
 
 .brush{display:flex; align-items:center; gap:12px; padding:6px 0}

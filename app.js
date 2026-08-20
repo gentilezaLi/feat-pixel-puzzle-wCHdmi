@@ -17,6 +17,9 @@ const SKINS = [
 
 const PALETTE_SIZE = 16;   // 中位切分初始主色数量
 const DEDUP_THRESH = 2600; // 合并近似色的阈值（加权平方色距，约 17/通道）
+const PLUS_COLS = 200;     // PLUS 档列数阈值
+const PLUS_PALETTE_CUT = 28; // PLUS 初始中位切分色数
+const PLUS_PALETTE_MIN = 20; // PLUS 去重后至少保留色数
 
 const $ = id => document.getElementById(id);
 const canvas = $('grid'), ctx = canvas.getContext('2d', { alpha:false });
@@ -162,13 +165,17 @@ function nearestPalette(rgb, palette){
   }
   return bi;
 }
-function dedupePalette(palette, thresh){
+function dedupePalette(palette, thresh, minKeep = 0){
   const out = [];
-  for(const c of palette){
+  for(let i = 0; i < palette.length; i++){
+    const c = palette[i];
     let merged = false;
+    const remainAfter = palette.length - i - 1;
     for(const o of out){
       const d = colorDistRGB(c.r,c.g,c.b, o.r,o.g,o.b);
       if(d < thresh){
+        // PLUS：合并后即便吃掉后续全部，也不得少于 minKeep
+        if(minKeep && out.length + remainAfter < minKeep) break;
         o.r = Math.round((o.r + c.r)/2);
         o.g = Math.round((o.g + c.g)/2);
         o.b = Math.round((o.b + c.b)/2);
@@ -587,9 +594,13 @@ async function loadSkin(skin){
     if(gen !== loadGen) return;
     state.rows = rows;
 
-    const k = skin.paletteSize || PALETTE_SIZE;
+    const isPlus = state.cols >= PLUS_COLS;
+    // 显式 paletteSize（如极简四色）仍尊重；其余 PLUS 提高切分并至少保留 20 色
+    let k = skin.paletteSize || PALETTE_SIZE;
+    if(isPlus && !skin.paletteSize) k = Math.max(k, PLUS_PALETTE_CUT);
     const raw = medianCut(px, k);
-    const palette = k <= 8 ? raw : dedupePalette(raw, DEDUP_THRESH);
+    const minKeep = (isPlus && !skin.paletteSize) ? PLUS_PALETTE_MIN : 0;
+    const palette = k <= 8 ? raw : dedupePalette(raw, DEDUP_THRESH, minKeep);
     palette.sort((a,b) => lum(a) - lum(b));
     state.palette = palette;
 
