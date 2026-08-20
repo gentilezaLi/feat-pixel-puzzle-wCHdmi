@@ -40,7 +40,7 @@ let state = {
   rows: 0,
   selected: -1,       // 画笔索引
   painting: false,
-  hint: false,
+  hint: true,         // 默认显示底图，否则空格看不出该涂哪色
   revealed: false,
   autoFilling: false,
   total: 0,           // 可涂格子数（增量维护）
@@ -209,8 +209,8 @@ function cellColor(idx){
   if(state.revealed) return { c:state.palette[t].hex, a:1 };
   const f = state.filled[idx];
   if(f !== undefined && f !== -1) return { c:state.palette[f].hex, a:1 };
-  if(state.hint) return { c:state.palette[t].hex, a:0.28 };
-  return { c:'#1a1030', a:1 };
+  if(state.hint) return { c:state.palette[t].hex, a:0.42 };
+  return { c:state.palette[t].hex, a:0.18 };
 }
 
 function drawCell(idx, inset){
@@ -266,12 +266,12 @@ function scheduleDraw(){
   requestAnimationFrame(() => { drawScheduled = false; drawAll(); });
 }
 
-// 命中测试：屏幕坐标 → 格子索引
+// 命中测试：用 CSS 盒比例换算，避免 dpr / 画布像素取整造成点偏
 function hitTest(clientX, clientY){
   const rect = getCanvasRect();
-  const px = (clientX - rect.left) * dpr;
-  const py = (clientY - rect.top) * dpr;
-  const c = Math.floor(px / cellW), r = Math.floor(py / cellH);
+  if(rect.width <= 0 || rect.height <= 0 || !state.cols || !state.rows) return -1;
+  const c = Math.floor((clientX - rect.left) / rect.width * state.cols);
+  const r = Math.floor((clientY - rect.top) / rect.height * state.rows);
   if(c<0 || c>=state.cols || r<0 || r>=state.rows) return -1;
   return r * state.cols + c;
 }
@@ -287,7 +287,13 @@ function renderPalette(){
     s.addEventListener('click', () => selectBrush(i));
     paletteEl.appendChild(s);
   });
-  if(state.selected === -1 && state.palette.length) selectBrush(0);
+  if(state.selected === -1 && state.palette.length){
+    const counts = new Array(state.palette.length).fill(0);
+    for(const t of state.target) if(t >= 0) counts[t]++;
+    let best = 0, bestN = -1;
+    for(let i = 0; i < counts.length; i++) if(counts[i] > bestN){ bestN = counts[i]; best = i; }
+    selectBrush(best);
+  }
 }
 function selectBrush(i){
   if(i<0 || i>=state.palette.length) return;
@@ -339,9 +345,13 @@ function pickColor(idx){
   selectBrush(pick);
   showToast(`已定位 ${state.palette[pick].hex.toUpperCase()}`);
 }
-function onCellDown(idx){
+function onCellDown(idx, e){
   if(state.autoFilling) return;
-  if(state.hint){ pickColor(idx); return; }
+  // 右键 / Alt / Shift：从格子取色；左键始终涂色（显示底图时也能画）
+  if(e && (e.altKey || e.shiftKey || e.button === 2)){
+    pickColor(idx);
+    return;
+  }
   state.painting = true;
   paintCell(idx);
 }
@@ -460,7 +470,13 @@ canvas.addEventListener('mousedown', e => {
   e.preventDefault();
   invalidateCanvasRect();
   const idx = hitTest(e.clientX, e.clientY);
-  if(idx >= 0) onCellDown(idx);
+  if(idx >= 0) onCellDown(idx, e);
+});
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  invalidateCanvasRect();
+  const idx = hitTest(e.clientX, e.clientY);
+  if(idx >= 0) pickColor(idx);
 });
 canvas.addEventListener('mousemove', e => {
   if(!state.painting) return;
