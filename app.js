@@ -22,6 +22,11 @@ const $ = id => document.getElementById(id);
 const canvas = $('grid'), ctx = canvas.getContext('2d', { alpha:false });
 const paletteEl = $('palette'), thumbsEl = $('thumbs');
 const toastEl = $('toast'), victoryEl = $('victory');
+const brushDot = $('brushDot'), brushName = $('brushName'), brushHex = $('brushHex');
+const skinNameEl = $('skinName'), gridMetaEl = $('gridMeta');
+const btnReveal = $('btnReveal'), btnFillAll = $('btnFillAll'), btnFillRow = $('btnFillRow');
+const inCols = $('inCols'), inRows = $('inRows');
+const statPct = $('statPct'), statDoneEl = $('statDone'), statTotalEl = $('statTotal');
 
 let state = {
   skin: SKINS[0],
@@ -35,20 +40,40 @@ let state = {
   hint: false,
   revealed: false,
   autoFilling: false,
+  total: 0,           // 可涂格子数（增量维护）
+  done: 0,            // 已涂格子数（增量维护）
 };
 
 /* ---------- Canvas 画布状态 ---------- */
 let cellW = 0, cellH = 0;   // 设备像素/格
-let hoverIdx = -1;
 const wrongSet = new Set();
+const wrongTimers = new Map();
 let drawScheduled = false;
-const dpr = Math.max(1, window.devicePixelRatio || 1);
+let dpr = Math.max(1, window.devicePixelRatio || 1);
+let canvasRect = null;      // 命中测试用，resize/scroll 时失效
+let loadGen = 0;            // 丢弃过期的异步 loadSkin 结果
+let thumbsBuilt = false;
+const imageCache = new Map();
+const dsCanvas = document.createElement('canvas');
+const dsCtx = dsCanvas.getContext('2d', { willReadFrequently: true });
 
-/* ---------- 1. 加载图片 ---------- */
+function invalidateCanvasRect(){ canvasRect = null; }
+function getCanvasRect(){
+  if(!canvasRect) canvasRect = canvas.getBoundingClientRect();
+  return canvasRect;
+}
+function clearWrongTimers(){
+  for(const t of wrongTimers.values()) clearTimeout(t);
+  wrongTimers.clear();
+}
+
+/* ---------- 1. 加载图片（按路径缓存） ---------- */
 function loadImage(src){
+  const hit = imageCache.get(src);
+  if(hit) return Promise.resolve(hit);
   return new Promise((res, rej) => {
     const img = new Image();
-    img.onload = () => res(img);
+    img.onload = () => { imageCache.set(src, img); res(img); };
     img.onerror = rej;
     img.src = src;
   });
@@ -58,15 +83,16 @@ function loadImage(src){
 function downsample(img, cols, rowsOverride){
   const ratio = img.naturalHeight / img.naturalWidth;
   const rows = rowsOverride || Math.max(8, Math.round(cols * ratio));
-  const c = document.createElement('canvas');
-  c.width = cols; c.height = rows;
-  const cx = c.getContext('2d');
-  cx.imageSmoothingEnabled = true;
-  cx.drawImage(img, 0, 0, cols, rows);
-  const data = cx.getImageData(0, 0, cols, rows).data;
-  const px = new Array(cols * rows);
-  for(let i=0;i<cols*rows;i++){
-    px[i] = [data[i*4], data[i*4+1], data[i*4+2]];
+  dsCanvas.width = cols;
+  dsCanvas.height = rows;
+  dsCtx.imageSmoothingEnabled = true;
+  dsCtx.drawImage(img, 0, 0, cols, rows);
+  const data = dsCtx.getImageData(0, 0, cols, rows).data;
+  const n = cols * rows;
+  const px = new Array(n);
+  for(let i=0;i<n;i++){
+    const o = i * 4;
+    px[i] = [data[o], data[o+1], data[o+2]];
   }
   return { px, rows };
 }
@@ -92,15 +118,25 @@ function medianCut(pixels, k){
 }
 function boxRange(box){
   if(!box.length) return 0;
-  let mn=[255,255,255], mx=[0,0,0];
-  for(const p of box){ for(let i=0;i<3;i++){mn[i]=Math.min(mn[i],p[i]);mx[i]=Math.max(mx[i],p[i])} }
-  return Math.max(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]);
+  let rMin=255,gMin=255,bMin=255,rMax=0,gMax=0,bMax=0;
+  for(const p of box){
+    const r=p[0], g=p[1], b=p[2];
+    if(r<rMin) rMin=r; if(r>rMax) rMax=r;
+    if(g<gMin) gMin=g; if(g>gMax) gMax=g;
+    if(b<bMin) bMin=b; if(b>bMax) bMax=b;
+  }
+  return Math.max(rMax-rMin, gMax-gMin, bMax-bMin);
 }
 function longestChannel(box){
-  let mn=[255,255,255], mx=[0,0,0];
-  for(const p of box){ for(let i=0;i<3;i++){mn[i]=Math.min(mn[i],p[i]);mx[i]=Math.max(mx[i],p[i])} }
-  const d=[mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]];
-  return d.indexOf(Math.max(d[0],d[1],d[2]));
+  let rMin=255,gMin=255,bMin=255,rMax=0,gMax=0,bMax=0;
+  for(const p of box){
+    const r=p[0], g=p[1], b=p[2];
+    if(r<rMin) rMin=r; if(r>rMax) rMax=r;
+    if(g<gMin) gMin=g; if(g>gMax) gMax=g;
+    if(b<bMin) bMin=b; if(b>bMax) bMax=b;
+  }
+  const dr=rMax-rMin, dg=gMax-gMin, db=bMax-bMin;
+  return dr >= dg && dr >= db ? 0 : (dg >= db ? 1 : 2);
 }
 function avg(box){
   if(!box.length) return null;
@@ -112,14 +148,16 @@ function avg(box){
 }
 
 /* ---------- 4. 加权 RGB 色差 ---------- */
-function colorDist(a, b){
-  const r=a[0]-b[0], g=a[1]-b[1], b2=a[2]-b[2];
-  return 2*r*r + 4*g*g + 3*b2*b2;
+function colorDistRGB(r1,g1,b1,r2,g2,b2){
+  const r=r1-r2, g=g1-g2, b=b1-b2;
+  return 2*r*r + 4*g*g + 3*b*b;
 }
 function nearestPalette(rgb, palette){
   let bi=0, bd=Infinity;
+  const r=rgb[0], g=rgb[1], b=rgb[2];
   for(let i=0;i<palette.length;i++){
-    const d = colorDist(rgb, [palette[i].r, palette[i].g, palette[i].b]);
+    const p = palette[i];
+    const d = colorDistRGB(r, g, b, p.r, p.g, p.b);
     if(d < bd){ bd=d; bi=i; }
   }
   return bi;
@@ -129,7 +167,7 @@ function dedupePalette(palette, thresh){
   for(const c of palette){
     let merged = false;
     for(const o of out){
-      const d = colorDist([c.r,c.g,c.b], [o.r,o.g,o.b]);
+      const d = colorDistRGB(c.r,c.g,c.b, o.r,o.g,o.b);
       if(d < thresh){
         o.r = Math.round((o.r + c.r)/2);
         o.g = Math.round((o.g + c.g)/2);
@@ -145,7 +183,9 @@ function dedupePalette(palette, thresh){
 
 /* ---------- 5. Canvas 绘制 ---------- */
 function resizeCanvas(){
-  const rect = canvas.getBoundingClientRect();
+  dpr = Math.max(1, window.devicePixelRatio || 1);
+  invalidateCanvasRect();
+  const rect = getCanvasRect();
   const w = Math.max(1, Math.round(rect.width * dpr));
   const h = Math.max(1, Math.round(rect.height * dpr));
   if(canvas.width !== w) canvas.width = w;
@@ -186,12 +226,6 @@ function drawCell(idx, inset){
     ctx.lineTo(x+inset+2, y+inset+h-2);
     ctx.stroke();
   }
-  // hover 高亮并入单格绘制，局部重绘也能带上
-  if(idx === hoverIdx && !state.painting){
-    ctx.strokeStyle = '#2de2e6';
-    ctx.lineWidth = Math.max(1, cellW/10);
-    ctx.strokeRect(x+0.5, y+0.5, cellW-1, cellH-1);
-  }
 }
 
 function drawAll(){
@@ -203,7 +237,7 @@ function drawAll(){
   for(let i=0;i<n;i++) drawCell(i, inset);
 }
 
-// 局部重绘：只刷新受影响格子（含 hover 高亮），5 万格交互也丝滑
+// 局部重绘：只刷新受影响格子，5 万格交互也丝滑
 function redrawCells(idxs){
   if(!state.palette.length || !cellW) return;
   const inset = Math.max(0.5, Math.min(cellW * 0.07, 2));
@@ -227,7 +261,7 @@ function scheduleDraw(){
 
 // 命中测试：屏幕坐标 → 格子索引
 function hitTest(clientX, clientY){
-  const rect = canvas.getBoundingClientRect();
+  const rect = getCanvasRect();
   const px = (clientX - rect.left) * dpr;
   const py = (clientY - rect.top) * dpr;
   const c = Math.floor(px / cellW), r = Math.floor(py / cellH);
@@ -251,12 +285,15 @@ function renderPalette(){
 function selectBrush(i){
   if(i<0 || i>=state.palette.length) return;
   state.selected = i;
-  renderPalette();
+  const swatches = paletteEl.children;
+  for(let j=0;j<swatches.length;j++){
+    swatches[j].classList.toggle('active', j === i);
+  }
   const p = state.palette[i];
-  $('brushDot').style.background = p.hex;
-  $('brushDot').style.color = p.hex;
-  $('brushName').textContent = `色卡 #${(i+1).toString().padStart(2,'0')}`;
-  $('brushHex').textContent = p.hex.toUpperCase();
+  brushDot.style.background = p.hex;
+  brushDot.style.color = p.hex;
+  brushName.textContent = `色卡 #${(i+1).toString().padStart(2,'0')}`;
+  brushHex.textContent = p.hex.toUpperCase();
 }
 
 /* ---------- 7. 涂色校验（按索引，Canvas 友好） ---------- */
@@ -267,14 +304,22 @@ function paintCell(idx){
   if(state.filled[idx] !== undefined && state.filled[idx] !== -1) return; // 已涂
   if(state.selected === -1){ showToast('请先选择颜色'); return; }
   if(state.selected === t){
+    const wt = wrongTimers.get(idx);
+    if(wt){ clearTimeout(wt); wrongTimers.delete(idx); }
     wrongSet.delete(idx);
     state.filled[idx] = t;
+    state.done++;
     redrawCells([idx]); updateStats(); checkVictory();
   } else {
     wrongSet.add(idx);
     showToast('不能涂这个颜色！');
     redrawCells([idx]);
-    setTimeout(() => { if(state.filled[idx] !== t){ wrongSet.delete(idx); redrawCells([idx]); } }, 800);
+    const prev = wrongTimers.get(idx);
+    if(prev) clearTimeout(prev);
+    wrongTimers.set(idx, setTimeout(() => {
+      wrongTimers.delete(idx);
+      if(state.filled[idx] !== t){ wrongSet.delete(idx); redrawCells([idx]); }
+    }, 800));
   }
 }
 
@@ -309,13 +354,14 @@ function guardLazy(){
   if(state.autoFilling) return false;
   return true;
 }
-function setLazyDisabled(d){ $('btnFillAll').disabled = d; $('btnFillRow').disabled = d; }
+function setLazyDisabled(d){ btnFillAll.disabled = d; btnFillRow.disabled = d; }
 // 方式一：一键涂满
 function fillAllInstant(){
   if(!guardLazy()) return;
   const targets = getFillTargets();
   if(!targets.length){ showToast('该颜色已全部涂完'); return; }
   for(const idx of targets){ state.filled[idx] = state.selected; wrongSet.delete(idx); }
+  state.done += targets.length;
   scheduleDraw(); updateStats(); checkVictory();
 }
 // 方式二：逐行模拟手动点击（自适应批量，恒定约 3 秒播完）
@@ -327,11 +373,13 @@ function fillRowByRow(){
   const batch = Math.max(1, Math.ceil(targets.length / 300));
   let i = 0;
   const step = () => {
+    if(!state.autoFilling) return;
     const slice = [];
     for(let k=0;k<batch && i<targets.length;k++,i++){
       state.filled[targets[i]] = state.selected; wrongSet.delete(targets[i]);
       slice.push(targets[i]);
     }
+    state.done += slice.length;
     redrawCells(slice); updateStats();
     if(i >= targets.length){ state.autoFilling=false; setLazyDisabled(false); checkVictory(); return; }
     setTimeout(step, 10);
@@ -347,19 +395,16 @@ function showToast(msg){
 }
 
 function updateStats(){
-  const total = state.target.filter(t => t !== -1).length;
-  const done = state.filled.filter(f => f !== undefined && f !== -1).length;
+  const total = state.total;
+  const done = state.done;
   const pct = total ? Math.round(done/total*100) : 0;
-  $('statPct').textContent = pct + '%';
-  $('statDone').textContent = done;
-  $('statTotal').textContent = total;
+  statPct.textContent = pct + '%';
+  statDoneEl.textContent = done;
+  statTotalEl.textContent = total;
 }
 
 function checkVictory(){
-  for(let i=0;i<state.target.length;i++){
-    if(state.target[i] === -1) continue;
-    if(state.filled[i] !== state.target[i]) return;
-  }
+  if(!state.total || state.done < state.total) return;
   showVictory();
 }
 
@@ -406,27 +451,19 @@ function showVictory(){
 /* ---------- 10. 交互事件（Canvas 命中测试） ---------- */
 canvas.addEventListener('mousedown', e => {
   e.preventDefault();
+  invalidateCanvasRect();
   const idx = hitTest(e.clientX, e.clientY);
   if(idx >= 0) onCellDown(idx);
 });
 canvas.addEventListener('mousemove', e => {
+  if(!state.painting) return;
   const idx = hitTest(e.clientX, e.clientY);
-  if(state.painting && idx >= 0) paintCell(idx);
-  if(idx !== hoverIdx){
-    const prev = hoverIdx; hoverIdx = idx;
-    const cells = [];
-    if(prev >= 0) cells.push(prev);
-    if(idx >= 0) cells.push(idx);
-    if(cells.length) redrawCells(cells);
-  }
-});
-canvas.addEventListener('mouseleave', () => {
-  const prev = hoverIdx; hoverIdx = -1;
-  if(prev >= 0) redrawCells([prev]);
+  if(idx >= 0) paintCell(idx);
 });
 window.addEventListener('mouseup', () => state.painting = false);
 canvas.addEventListener('touchstart', e => {
   const t = e.touches[0];
+  invalidateCanvasRect();
   const idx = hitTest(t.clientX, t.clientY);
   if(idx >= 0) onCellDown(idx);
   e.preventDefault();
@@ -439,6 +476,7 @@ canvas.addEventListener('touchmove', e => {
   e.preventDefault();
 }, {passive:false});
 window.addEventListener('touchend', () => state.painting = false);
+window.addEventListener('scroll', invalidateCanvasRect, true);
 
 // 响应式：尺寸变化时重设画布像素并重绘
 const ro = new ResizeObserver(() => resizeCanvas());
@@ -446,53 +484,67 @@ ro.observe(canvas);
 
 /* ---------- 11. 缩略图 + 控件 ---------- */
 function renderThumbs(){
-  thumbsEl.innerHTML = '';
-  SKINS.forEach(s => {
-    const t = document.createElement('div');
-    t.className = 'thumb' + (s.id===state.skin.id ? ' active' : '');
-    t.innerHTML = `<img src="${s.file}" alt="${s.name}"><div class="thumb-name">${s.name.split('·')[1]||s.name}</div>`;
-    t.addEventListener('click', () => loadSkin(s));
-    thumbsEl.appendChild(t);
-  });
+  if(!thumbsBuilt){
+    thumbsEl.innerHTML = '';
+    SKINS.forEach(s => {
+      const t = document.createElement('div');
+      t.className = 'thumb';
+      t.dataset.id = s.id;
+      const img = document.createElement('img');
+      img.src = s.file;
+      img.alt = s.name;
+      const name = document.createElement('div');
+      name.className = 'thumb-name';
+      name.textContent = s.name.split('·')[1] || s.name;
+      t.append(img, name);
+      t.addEventListener('click', () => loadSkin(s));
+      thumbsEl.appendChild(t);
+    });
+    thumbsBuilt = true;
+  }
+  const id = state.skin.id;
+  for(const t of thumbsEl.children){
+    t.classList.toggle('active', t.dataset.id === id);
+  }
 }
 
 function clamp(v,min,max){return Math.max(min,Math.min(max,v||min))}
 function readSize(){
-  state.cols = clamp(+$('inCols').value, 8, 250);
-  const rv = $('inRows').value.trim();
+  state.cols = clamp(+inCols.value, 8, 250);
+  const rv = inRows.value.trim();
   state.rows = rv === '' ? 0 : clamp(+rv, 8, 400); // 0 = 按图片宽高比自动
-  $('inCols').value = state.cols;
-  if(state.rows) $('inRows').value = state.rows;
+  inCols.value = state.cols;
+  if(state.rows) inRows.value = state.rows;
 }
 $('sizeSwitch').addEventListener('click', e => {
   const b = e.target.closest('.seg.preset');
   if(!b) return;
   document.querySelectorAll('#sizeSwitch .seg.preset').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
-  $('inCols').value = b.dataset.cols;
-  $('inRows').value = '';   // 预设只定列数，行数自动跟随图片宽高比
+  inCols.value = b.dataset.cols;
+  inRows.value = '';   // 预设只定列数，行数自动跟随图片宽高比
   loadSkin(state.skin);
 });
 $('btnApply').addEventListener('click', () => {
   document.querySelectorAll('#sizeSwitch .seg.preset').forEach(x=>x.classList.remove('active'));
   loadSkin(state.skin);
 });
-$('inCols').addEventListener('change', () => loadSkin(state.skin));
-$('inRows').addEventListener('change', () => loadSkin(state.skin));
+inCols.addEventListener('change', () => loadSkin(state.skin));
+inRows.addEventListener('change', () => loadSkin(state.skin));
 
 $('btnHint').addEventListener('click', e => {
   state.hint = !state.hint;
   e.target.classList.toggle('active', state.hint);
   scheduleDraw();
 });
-$('btnReveal').addEventListener('click', e => {
+btnReveal.addEventListener('click', e => {
   state.revealed = !state.revealed;
   e.target.textContent = state.revealed ? '回到我的进度' : '查看完成图';
   e.target.classList.toggle('active', state.revealed);
   scheduleDraw();
 });
-$('btnFillAll').addEventListener('click', fillAllInstant);
-$('btnFillRow').addEventListener('click', fillRowByRow);
+btnFillAll.addEventListener('click', fillAllInstant);
+btnFillRow.addEventListener('click', fillRowByRow);
 $('btnReset').addEventListener('click', () => loadSkin(state.skin));
 $('victoryReset').addEventListener('click', () => {
   victoryEl.classList.remove('show');
@@ -501,22 +553,32 @@ $('victoryReset').addEventListener('click', () => {
 
 /* ---------- 12. 主流程 ---------- */
 async function loadSkin(skin){
+  const gen = ++loadGen;
   state.skin = skin;
   state.selected = -1;
   state.filled = [];
+  state.done = 0;
+  state.total = 0;
+  state.autoFilling = false;
+  setLazyDisabled(false);
   wrongSet.clear();
+  clearWrongTimers();
   victoryEl.classList.remove('show');
   clearInterval(showVictory._t);
   state.revealed = false;
-  $('btnReveal').textContent = '查看完成图';
-  $('btnReveal').classList.remove('active');
-  $('skinName').textContent = `载入中… ${skin.name}`;
+  btnReveal.textContent = '查看完成图';
+  btnReveal.classList.remove('active');
+  skinNameEl.textContent = `载入中… ${skin.name}`;
   renderThumbs();
+  updateStats();
 
   try{
     readSize();
     const img = await loadImage(skin.file);
+    if(gen !== loadGen) return;
+
     const { px, rows } = downsample(img, state.cols, state.rows);
+    if(gen !== loadGen) return;
     state.rows = rows;
 
     const k = skin.paletteSize || PALETTE_SIZE;
@@ -526,21 +588,32 @@ async function loadSkin(skin){
     state.palette = palette;
 
     const target = new Array(px.length);
+    let total = 0;
     for(let i=0;i<px.length;i++){
       const [r,g,b] = px[i];
       const lumv = 0.2126*r + 0.7152*g + 0.0722*b;
-      target[i] = lumv < 14 ? -1 : nearestPalette([r,g,b], palette);
+      if(lumv < 14){
+        target[i] = -1;
+      } else {
+        target[i] = nearestPalette([r,g,b], palette);
+        total++;
+      }
     }
+    if(gen !== loadGen) return;
     state.target = target;
+    state.total = total;
+    state.done = 0;
 
     canvas.style.aspectRatio = `${state.cols} / ${rows}`;
-    $('skinName').textContent = skin.name;
-    $('gridMeta').textContent = `${state.cols}×${rows} · ${palette.length}色`;
+    skinNameEl.textContent = skin.name;
+    gridMetaEl.textContent = `${state.cols}×${rows} · ${palette.length}色`;
 
     renderPalette();
+    updateStats();
     requestAnimationFrame(resizeCanvas); // 尺寸变化后再绘制
   }catch(err){
-    $('skinName').textContent = '加载失败：' + err.message;
+    if(gen !== loadGen) return;
+    skinNameEl.textContent = '加载失败：' + err.message;
     console.error(err);
   }
 }

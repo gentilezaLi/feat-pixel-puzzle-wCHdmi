@@ -128,19 +128,6 @@ body{
   background:#0d0820; border-radius:4px;
   user-select:none; touch-action:none; cursor:crosshair;
 }
-.cell{
-  background:#1a1030; border-radius:1px; cursor:pointer; position:relative;
-  transition:background .12s ease, box-shadow .12s ease;
-}
-.cell:hover{box-shadow:0 0 0 1px var(--neon-cyan) inset}
-.cell.hint{opacity:.22}
-.cell.filled{cursor:default}
-.cell.revealed{cursor:default}
-.cell.revealed:hover{box-shadow:none}
-.cell.wrong{animation:shake .35s ease; box-shadow:0 0 0 2px var(--danger) inset, 0 0 10px var(--danger)}
-.cell.wrong::after{content:"×"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-  color:var(--danger); font-weight:700; font-size:14px; text-shadow:0 0 6px var(--danger)}
-@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
 
 .toast{
   position:absolute; top:14px; left:50%; transform:translate(-50%,-10px);
