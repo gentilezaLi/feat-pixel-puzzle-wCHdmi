@@ -186,21 +186,35 @@ function drawCell(idx, inset){
     ctx.lineTo(x+inset+2, y+inset+h-2);
     ctx.stroke();
   }
+  // hover 高亮并入单格绘制，局部重绘也能带上
+  if(idx === hoverIdx && !state.painting){
+    ctx.strokeStyle = '#2de2e6';
+    ctx.lineWidth = Math.max(1, cellW/10);
+    ctx.strokeRect(x+0.5, y+0.5, cellW-1, cellH-1);
+  }
 }
 
 function drawAll(){
   if(!state.palette.length || !state.cols || !cellW) return;
-  const W = canvas.width, H = canvas.height;
   ctx.fillStyle = '#0d0820';
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   const inset = Math.max(0.5, Math.min(cellW * 0.07, 2));
   const n = state.cols * state.rows;
   for(let i=0;i<n;i++) drawCell(i, inset);
-  if(hoverIdx >= 0 && !state.painting){
-    const c = hoverIdx % state.cols, r = (hoverIdx / state.cols) | 0;
-    ctx.strokeStyle = '#2de2e6';
-    ctx.lineWidth = Math.max(1, cellW/10);
-    ctx.strokeRect(c*cellW+0.5, r*cellH+0.5, cellW-1, cellH-1);
+}
+
+// 局部重绘：只刷新受影响格子（含 hover 高亮），5 万格交互也丝滑
+function redrawCells(idxs){
+  if(!state.palette.length || !cellW) return;
+  const inset = Math.max(0.5, Math.min(cellW * 0.07, 2));
+  const n = state.cols * state.rows;
+  for(const idx of idxs){
+    if(idx < 0 || idx >= n) continue;
+    const c = idx % state.cols, r = (idx / state.cols) | 0;
+    const x = c * cellW, y = r * cellH;
+    ctx.fillStyle = '#0d0820';
+    ctx.fillRect(x, y, cellW, cellH);
+    drawCell(idx, inset);
   }
 }
 
@@ -255,12 +269,12 @@ function paintCell(idx){
   if(state.selected === t){
     wrongSet.delete(idx);
     state.filled[idx] = t;
-    scheduleDraw(); updateStats(); checkVictory();
+    redrawCells([idx]); updateStats(); checkVictory();
   } else {
     wrongSet.add(idx);
     showToast('不能涂这个颜色！');
-    scheduleDraw();
-    setTimeout(() => { if(state.filled[idx] !== t){ wrongSet.delete(idx); scheduleDraw(); } }, 800);
+    redrawCells([idx]);
+    setTimeout(() => { if(state.filled[idx] !== t){ wrongSet.delete(idx); redrawCells([idx]); } }, 800);
   }
 }
 
@@ -313,10 +327,12 @@ function fillRowByRow(){
   const batch = Math.max(1, Math.ceil(targets.length / 300));
   let i = 0;
   const step = () => {
+    const slice = [];
     for(let k=0;k<batch && i<targets.length;k++,i++){
       state.filled[targets[i]] = state.selected; wrongSet.delete(targets[i]);
+      slice.push(targets[i]);
     }
-    scheduleDraw(); updateStats();
+    redrawCells(slice); updateStats();
     if(i >= targets.length){ state.autoFilling=false; setLazyDisabled(false); checkVictory(); return; }
     setTimeout(step, 10);
   };
@@ -396,9 +412,18 @@ canvas.addEventListener('mousedown', e => {
 canvas.addEventListener('mousemove', e => {
   const idx = hitTest(e.clientX, e.clientY);
   if(state.painting && idx >= 0) paintCell(idx);
-  if(idx !== hoverIdx){ hoverIdx = idx; scheduleDraw(); }
+  if(idx !== hoverIdx){
+    const prev = hoverIdx; hoverIdx = idx;
+    const cells = [];
+    if(prev >= 0) cells.push(prev);
+    if(idx >= 0) cells.push(idx);
+    if(cells.length) redrawCells(cells);
+  }
 });
-canvas.addEventListener('mouseleave', () => { hoverIdx = -1; scheduleDraw(); });
+canvas.addEventListener('mouseleave', () => {
+  const prev = hoverIdx; hoverIdx = -1;
+  if(prev >= 0) redrawCells([prev]);
+});
 window.addEventListener('mouseup', () => state.painting = false);
 canvas.addEventListener('touchstart', e => {
   const t = e.touches[0];
@@ -433,9 +458,9 @@ function renderThumbs(){
 
 function clamp(v,min,max){return Math.max(min,Math.min(max,v||min))}
 function readSize(){
-  state.cols = clamp(+$('inCols').value, 8, 120);
+  state.cols = clamp(+$('inCols').value, 8, 250);
   const rv = $('inRows').value.trim();
-  state.rows = rv === '' ? 0 : clamp(+rv, 8, 200); // 0 = 按图片宽高比自动
+  state.rows = rv === '' ? 0 : clamp(+rv, 8, 400); // 0 = 按图片宽高比自动
   $('inCols').value = state.cols;
   if(state.rows) $('inRows').value = state.rows;
 }
